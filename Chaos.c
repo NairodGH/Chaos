@@ -13,12 +13,12 @@
 // AOB anchor patterns and their respective offsets to find the real percent/shield address for each fighter,
 // here was my process for finding them (percents example, it varies a lot from game to game/what you want):
 // • attach CheatEngine to the process
-// • make sure MEM_MAPPED scan (Settings->Scan Settings) is on since yuzu is an emulator
+// • make sure MEM_MAPPED scan (Settings->Scan Settings) is on since it's what emulators use, you can even turn off others to make scans faster
 // • here we know percents in smash bros are decimal, so value type is float
 // • damage the fighter a bit and first scan Exact value of what's displayed
 // • refine the results by repeating damage->scan multiple times for increased/unchanged values
 // • stop once there's fewer results/they all match the percentage
-// • I've noticed yuzu copies the memory so I'd only move in the address list the first half of the results based on their addresses
+// • I've noticed some emulators copies the memory so I'd only move in the address list the first half of the results based on their addresses
 // • only one of them is the actual percent value (others are for display etc...), change them 1 per 1,
 //   if changing one changes some others it's probably the one, test in-game if it works to make sure
 // • remove the useless others->select the good one->open Memory View
@@ -26,13 +26,39 @@
 //   what we need to find is some constant AOB pattern anchor that we can get to the percent bytes from,
 //   this part is tedious and requires you to understand what the batches of bytes you're seeing could mean if they were the game's code,
 //   the percents are probably in some sort of Player class, by finding the AOB pattern of its start I can reliably get
-//   the percent address off of it by adding the offset (distance from the AOB anchor to the actual percent address)
+//   the percent address off of it by adding the offset (distance from the AOB anchor to the actual percent address),
+//   I'd just go up from the percent bytes until finding what looks like the start of the class (there was nothing above it for a while)
 // • you can test it by starting another match and directly scanning for it with Exact Value/Array Of Byte, if
 //   it exists and you can find the modifyable percent address by adding the offset then you're done !
-// AOB anchor patterns don't usually change from yuzu/smash bros version to another but in case the cheat doesn't work anymore then
-// you should first look into that, I've only had to update them once by changing their last byte
-static CONST BYTE percentsPattern[] = {0x48, 0xB5, 0x2B, 0x85}; //48 B5 2B 85
-static CONST BYTE shieldsPattern[] = {0x10, 0x22, 0xF8, 0x84}; //10 22 F8 84
+// AOB anchor patterns change from a smash bros version or emulator to another so in case the cheat doesn't work anymore ("match not started")
+// then make a github issues/contact me on discord, note that so far only 1 nibble changes everytime so it's quite easy to go up and find it again
+// by getting a similar one, offsets never change
+#define NB_VERSIONS 5
+#define NB_EMULATORS 2
+CONST BYTE percentsPatterns[NB_VERSIONS * NB_EMULATORS][4] = {
+    {0x48, 0xB5, 0x2B, 0x85}, //13.0.0 yuzu 48 B5 2B 85
+    {0x48, 0xB5, 0x2B, 0x85}, //13.0.1 yuzu 48 B5 2B 85
+    {0x48, 0xD5, 0x2B, 0x85}, //13.0.2 yuzu 48 D5 2B 85
+    {0x48, 0xD5, 0x2B, 0x85}, //13.0.3 yuzu 48 D5 2B 85
+    {0x48, 0xC5, 0x2B, 0x85}, //13.0.4 yuzu 48 C5 2B 85
+    {0x48, 0xB5, 0x7B, 0x0D}, //13.0.0 ryujinx 48 B5 7B 0D
+    {0x48, 0xB5, 0x7B, 0x0D}, //13.0.1 ryujinx 48 B5 7B 0D
+    {0x48, 0xD5, 0x7B, 0x0D}, //13.0.2 ryujinx 48 D5 7B 0D
+    {0x48, 0xD5, 0x7B, 0x0D}, //13.0.3 ryujinx 48 D5 7B 0D
+    {0x48, 0xC5, 0x7B, 0x0D}, //13.0.4 ryujinx 48 C5 7B 0D
+};
+CONST BYTE shieldsPatterns[NB_VERSIONS * NB_EMULATORS][4] = {
+    {0xF0, 0x21, 0xF8, 0x84}, //13.0.0 yuzu F0 21 F8 84
+    {0x10, 0x22, 0xF8, 0x84}, //13.0.1 yuzu 10 22 F8 84
+    {0x10, 0x42, 0xF8, 0x84}, //13.0.2 yuzu 10 42 F8 84
+    {0x10, 0x42, 0xF8, 0x84}, //13.0.3 yuzu 10 42 F8 84
+    {0x10, 0x32, 0xF8, 0x84}, //13.0.4 yuzu 10 32 F8 84
+    {0xF0, 0x21, 0x48, 0x0D}, //13.0.0 ryujinx F0 21 48 0D
+    {0x10, 0x22, 0x48, 0x0D}, //13.0.1 ryujinx 10 22 48 0D
+    {0x10, 0x42, 0x48, 0x0D}, //13.0.2 ryujinx 10 42 48 0D
+    {0x10, 0x42, 0x48, 0x0D}, //13.0.3 ryujinx 10 42 48 0D
+    {0x10, 0x32, 0x48, 0x0D}, //13.0.4 ryujinx 10 32 48 0D
+};
 #define PERCENTS_OFFSET 0x1BF8
 #define SHIELDS_OFFSET 0x894
 
@@ -41,10 +67,12 @@ static CONST BYTE shieldsPattern[] = {0x10, 0x22, 0xF8, 0x84}; //10 22 F8 84
 #include <stdio.h>
 #endif
 
-// handles to the yuzu process, the app window and it's components
+// handles to the emulator process, the app window and it's components
 typedef struct {
-    HANDLE yuzu;
+    HANDLE emulator;
     HWND window;
+    HWND temp; //emulator's HWND, only used in startSearch to get its HANDLE
+    HWND ssbuVersion;
     HWND infos[NB_CHEATS];
     HWND starts[NB_CHEATS];
     HWND hotKeys[NB_CHEATS];
@@ -67,6 +95,8 @@ typedef struct {
     FLOAT previousValues[MAX_FIGHTERS * NB_CHEATS];
     INT8 modifiers[MAX_FIGHTERS * NB_CHEATS];
     DWORD keys[NB_CHEATS];
+    UINT8 ssbuVersion;
+    BOOL isRyujinx;
 } DATA;
 
 // main struct, basically has all values that are used in different functions
@@ -98,16 +128,23 @@ VOID Destroy(CHAOS *chaos)
     PostQuitMessage(0);
 }
 
-// callback function of EnumWindows that, for each of the opened windows, checks if it's yuzu with smash bros started (as it fortunately modifies it's name)
-// and gets its hwnd handle through lParam if so
+// callback function of EnumWindows that, for each of the opened windows, checks if it's an emulator and gets its hwnd handle through lParam if so
 BOOL CALLBACK EnumWindowsProc(_In_ HWND hwnd, _In_ LPARAM lParam)
 {
+    CHAOS* chaos = (CHAOS*)lParam;
     INT nameLength = GetWindowTextLengthA(hwnd);
     LPSTR name = (LPSTR)malloc(nameLength + 1);
 
     GetWindowTextA(hwnd, name, nameLength + 1);
-    if (strstr(name, "yuzu") != NULL && strstr(name, "Super Smash Bros. Ultimate") != NULL) {
-        *(HWND *)(lParam) = hwnd;
+    CharLowerA(name);
+    if (strstr(name,"yuzu") ||
+        strstr(name,"sudachi") ||
+        strstr(name,"suyu") ||
+        strstr(name,"citron") ||
+        strstr(name,"eden") ||
+        strstr(name,"ryujinx")) {
+        chaos->handles->temp = hwnd;
+        chaos->data->isRyujinx = !!strstr(name,"ryujinx");
         free(name);
         return FALSE;
     }
@@ -115,18 +152,47 @@ BOOL CALLBACK EnumWindowsProc(_In_ HWND hwnd, _In_ LPARAM lParam)
     return TRUE;
 }
 
-// sent when a button is clicked (or unfocused (BN_KILLFOCUS) for hot key buttons), wParam is the HMENU id defined in Create (for start/stop and hot key buttons),
-// since unfocused is only used for hot key buttons (BS_NOTIFY), handle them first (based on their wParam):
+// sent when clicking start or changing the ssbuVersion, enters searching state and checks for an existing emulator window to register its handle
+VOID startSearch(CHAOS *chaos, UINT8 wParam) {
+    DWORD pid = 0;
+
+    HandleStatus(chaos, "Searching for game address...", &chaos->states->searching[wParam], wParam);
+    chaos->states->searching[wParam] = TRUE;
+    EnumWindows(EnumWindowsProc, (LPARAM)chaos);
+    if (!chaos->handles->temp) {
+        HandleStatus(chaos, "Emulator couldn't be found", &chaos->states->searching[wParam], wParam);
+        return;
+    }
+    GetWindowThreadProcessId(chaos->handles->temp, &pid);
+    chaos->handles->emulator = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+};
+
+// sent when a button is clicked (or unfocused (BN_KILLFOCUS) for hot key buttons), wParam is the HMENU id defined in Create's CreateWindowAs,
+// there's start/stop and hot key buttons for each cheat so handle the lone simple ssbuVersion first:
+// • if selection changed then get it, reset index/addresses and search again (which will use the respective patterns defined up there)
+// then since unfocused is only used for hot key buttons (BS_NOTIFY), handle them first (based on their wParam):
 // • if the button got clicked to record a key, unregister the existing one and notify that the recording is on
 // • if the button got clicked to validate a key, register it and show it (as text, which means the recording is off)
 // • if the key is already registered (cannot have the same HotKey registered even if different id), keep the recording on
 // • if the button got clicked with no key, go back to the initial text (recording off)
 // then handle start/stop buttons:
-// • if we're not already searching for addresses or running the cheat, start the search by verifying Smash Bros is started with EnumWindowsProc and
-//   getting its handle
+// • if we're not already searching for addresses or running the cheat, start the search
 // • otherwise stop the search/cheat and display the initial text
 VOID Command(CHAOS *chaos, WPARAM wParam)
 {
+    if (LOWORD(wParam) == 4) {
+        if (HIWORD(wParam) == CBN_SELCHANGE) {
+            chaos->data->ssbuVersion = (UINT8)SendMessageA(chaos->handles->ssbuVersion, CB_GETCURSEL, 0, 0);
+            chaos->data->index = 0;
+            for (UINT8 j = 0; j < MAX_FIGHTERS; j++)
+                chaos->data->addresses[j] = chaos->data->addresses[MAX_FIGHTERS + j] = 0;
+            for (UINT8 i = 0; i < NB_CHEATS; i++) {
+                chaos->states->active[i] = FALSE;
+                startSearch(chaos, i);
+            }
+        }
+        return;
+    }
     for (UINT8 i = 0; i < NB_CHEATS; i++) {
         char text[256] = {0};
 
@@ -154,18 +220,7 @@ VOID Command(CHAOS *chaos, WPARAM wParam)
         }
     }
     if (!chaos->states->searching[wParam] && !chaos->states->active[wParam]) {
-        DWORD pid = 0;
-        HWND hYuzu = NULL;
-
-        HandleStatus(chaos, "Searching for game address...", &chaos->states->searching[wParam], (UINT8)wParam);
-        chaos->states->searching[wParam] = TRUE;
-        EnumWindows(EnumWindowsProc, (LPARAM)(&hYuzu));
-        if (!hYuzu) {
-            HandleStatus(chaos, "Super Smash Bros. Ultimate couldn't be found", &chaos->states->searching[wParam], (UINT8)wParam);
-            return;
-        }
-        GetWindowThreadProcessId(hYuzu, &pid);
-        chaos->handles->yuzu = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+        startSearch(chaos, (UINT8)wParam);
         return;
     }
     if (chaos->states->searching[wParam])
@@ -229,6 +284,14 @@ VOID Create(CHAOS *chaos)
         SendMessageA(chaos->handles->sliders[i], TBM_SETRANGE, TRUE, MAKELONG(-100, 100));
         SendMessageA(chaos->handles->sliders[i], TBM_SETPAGESIZE, 0, 1);
     }
+    chaos->handles->ssbuVersion = CreateWindowA("combobox", NULL, WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST, 605, 0, 70, 720, chaos->handles->window, (HMENU)4, NULL, NULL);
+    for (UINT8 i = 0; i < NB_VERSIONS; i++) {
+        char buf[7];
+        wsprintfA(buf, "13.0.%d", i);
+        SendMessageA(chaos->handles->ssbuVersion, CB_ADDSTRING, 0, (LPARAM)buf);
+    }
+    chaos->data->ssbuVersion = NB_VERSIONS - 1;
+    SendMessageA(chaos->handles->ssbuVersion, CB_SETCURSEL, NB_VERSIONS - 1, 0);
 }
 
 // sent before WM_CREATE when the app window is created, allocates the chaos struct and stores it in a special space in the app window made for user data
@@ -284,7 +347,7 @@ VOID Chaos(CHAOS *chaos)
     for (UINT8 i = 0; i < MAX_FIGHTERS; i++) {
         if (!chaos->data->addresses[i])
             break;
-        if (!ReadProcessMemory(chaos->handles->yuzu, (LPCVOID)(chaos->data->addresses[i] + PERCENTS_OFFSET), &percent, sizeof(percent), 0)) {
+        if (!ReadProcessMemory(chaos->handles->emulator, (LPCVOID)(chaos->data->addresses[i] + PERCENTS_OFFSET), &percent, sizeof(percent), 0)) {
             chaos->data->index = 0;
             for (UINT8 j = 0; j < MAX_FIGHTERS; j++)
                 chaos->data->addresses[j] = chaos->data->addresses[MAX_FIGHTERS + j] = 0;
@@ -298,18 +361,18 @@ VOID Chaos(CHAOS *chaos)
                 chaos->data->previousValues[i] = 0;
             if (percent > chaos->data->previousValues[i] && chaos->data->previousValues[i] != 0) {
                 percent += (percent - chaos->data->previousValues[i]) * ((FLOAT)chaos->data->modifiers[i] / 100);
-                WriteProcessMemory(chaos->handles->yuzu, (LPVOID)(chaos->data->addresses[i] + PERCENTS_OFFSET), &percent, sizeof(percent), 0);
+                WriteProcessMemory(chaos->handles->emulator, (LPVOID)(chaos->data->addresses[i] + PERCENTS_OFFSET), &percent, sizeof(percent), 0);
             }
             chaos->data->previousValues[i] = percent;
         }
-        if (ReadProcessMemory(chaos->handles->yuzu, (LPCVOID)(chaos->data->addresses[MAX_FIGHTERS + i] + SHIELDS_OFFSET), &shield, sizeof(shield), 0)) {
+        if (ReadProcessMemory(chaos->handles->emulator, (LPCVOID)(chaos->data->addresses[MAX_FIGHTERS + i] + SHIELDS_OFFSET), &shield, sizeof(shield), 0)) {
             if (chaos->states->active[PERCENTS] && chaos->data->previousValues[MAX_FIGHTERS + i] - shield > 1) {
                 shield -= (chaos->data->previousValues[MAX_FIGHTERS + i] - shield) * ((FLOAT)chaos->data->modifiers[i] / 100);
-                WriteProcessMemory(chaos->handles->yuzu, (LPVOID)(chaos->data->addresses[MAX_FIGHTERS + i] + SHIELDS_OFFSET), &shield, sizeof(shield), 0);
+                WriteProcessMemory(chaos->handles->emulator, (LPVOID)(chaos->data->addresses[MAX_FIGHTERS + i] + SHIELDS_OFFSET), &shield, sizeof(shield), 0);
             }
             if (chaos->states->active[SHIELDS] && 0 < shield - chaos->data->previousValues[MAX_FIGHTERS + i] && shield - chaos->data->previousValues[MAX_FIGHTERS + i] < 1) {
                 shield += (shield - chaos->data->previousValues[MAX_FIGHTERS + i]) * ((FLOAT)chaos->data->modifiers[MAX_FIGHTERS + i] / 100);
-                WriteProcessMemory(chaos->handles->yuzu, (LPVOID)(chaos->data->addresses[MAX_FIGHTERS + i] + SHIELDS_OFFSET), &shield, sizeof(shield), 0);
+                WriteProcessMemory(chaos->handles->emulator, (LPVOID)(chaos->data->addresses[MAX_FIGHTERS + i] + SHIELDS_OFFSET), &shield, sizeof(shield), 0);
             }
             chaos->data->previousValues[MAX_FIGHTERS + i] = shield;
         }
@@ -323,28 +386,28 @@ VOID Chaos(CHAOS *chaos)
 // all have a multiple of 4KB (4096 or 0x1000) size which means their hexadecimal start address will always end with at least 000 but I still kept the
 // cool bitwise operations that calculate the offset because it makes me feel smart),
 // everytime, for both shield and percents (except that for percents we then add 8 to the address), it
-// • iterates through the pattern-length next bytes comparing them to the pattern
+// • iterates through the pattern-length next bytes comparing them to the pattern (based on emulator and SSBU version)
 // • if all the bytes correspond and we havent found MAX_FIGHTERS addresses already (remember how memory is duplicated ?
 //   also turns out Nintendo always allocates shields for the maximum possible 3 (pokemon trainer) x 8 (max players in a match) = 24 instances 💀)
 //   then save the address
 // if we found some addresses (not all addresses will be in the same page) return them
-DATA *ScanPatterns(uintptr_t buffer, SIZE_T bytesRead, uintptr_t baseAddress)
+DATA *ScanPatterns(CHAOS *chaos, uintptr_t buffer, SIZE_T bytesRead, uintptr_t baseAddress)
 {
     DATA *data = (DATA *)calloc(1, sizeof(DATA));
     UINT8 nbPercentsFound = 0, nbShieldsFound = 0;
 
     for (uintptr_t i = ((((baseAddress >> 0x4) + ((baseAddress & 0xf) > 0x0)) << 0x4) | 0x0) - baseAddress; i < bytesRead; i += 0x10) {
         BOOL found = TRUE;
-        for (uintptr_t j = 0; found && j < sizeof(shieldsPattern) / sizeof(shieldsPattern[0]); j++)
-            if (shieldsPattern[j] != *(BYTE *)(buffer + i + j))
+        for (uintptr_t j = 0; found && j < sizeof(shieldsPatterns[chaos->data->ssbuVersion]); j++)
+            if (shieldsPatterns[NB_VERSIONS * chaos->data->isRyujinx + chaos->data->ssbuVersion][j] != *(BYTE *)(buffer + i + j))
                 found = FALSE;
         if (found && nbShieldsFound < MAX_FIGHTERS) {
             data->addresses[MAX_FIGHTERS + nbShieldsFound++] = baseAddress + i;
             continue;
         }
         found = TRUE;
-        for (uintptr_t j = 0; found && j < sizeof(percentsPattern) / sizeof(percentsPattern[0]); j++)
-            if (percentsPattern[j] != *(BYTE *)(buffer + i + 0x8 + j))
+        for (uintptr_t j = 0; found && j < sizeof(percentsPatterns[chaos->data->ssbuVersion]); j++)
+            if (percentsPatterns[NB_VERSIONS * chaos->data->isRyujinx + chaos->data->ssbuVersion][j] != *(BYTE *)(buffer + i + 0x8 + j))
                 found = FALSE;
         if (found && nbPercentsFound < MAX_FIGHTERS)
             data->addresses[nbPercentsFound++] = baseAddress + i + 0x8;
@@ -355,14 +418,14 @@ DATA *ScanPatterns(uintptr_t buffer, SIZE_T bytesRead, uintptr_t baseAddress)
     return NULL;
 }
 
-// retrieves info on the yuzu RAM page at index, if it
+// retrieves info on the emulator RAM page at index, if it
 // • has a size big enough to contain the AOB patterns we'll be searching for (the 0x200000 max size is an arbitrary value I've decided upon noticing the pages
 //   where I'd find the patterns would always be smaller than it, scanning for giant pages where it's not would be a big waste of time)
 // • is a committed page for which physical storage has been allocated (basically has data)
 // • has read and write permissions since we know the values we'll be searching for are the actual game variables that read/write to it
 // • is of type MEM_MAPPED, which is what emulators use
 // then it's a valid candidate that we can read into a buffer, ScanPatterns and save found addresses
-// if the page is empty then we reached the end of yuzu's RAM so:
+// if the page is empty then we reached the end of emulator's RAM so:
 // • if we didn't find our addresses then the match wasn't started (the percent/shield variables weren't created)
 // • otherwise we change the status to running and set straight away the current percent/shield values (see why in Chaos)
 // as mentionned in MainLoop, this function is the content of what a SearchAddresses loop would be with index being increased to the next page
@@ -373,11 +436,11 @@ VOID SearchAddresses(CHAOS *chaos)
     LPSTR buffer = NULL;
     SIZE_T bytesRead = 0;
 
-    if (VirtualQueryEx(chaos->handles->yuzu, (uintptr_t *)chaos->data->index, &mbi, sizeof(mbi)) && mbi.RegionSize > 0 &&
+    if (VirtualQueryEx(chaos->handles->emulator, (uintptr_t *)chaos->data->index, &mbi, sizeof(mbi)) && mbi.RegionSize > 0 &&
         mbi.RegionSize < 0x200000 && mbi.State == MEM_COMMIT && mbi.Protect == PAGE_READWRITE && mbi.Type == MEM_MAPPED) {
         buffer = (LPSTR)malloc(mbi.RegionSize);
-        ReadProcessMemory(chaos->handles->yuzu, mbi.BaseAddress, buffer, mbi.RegionSize, &bytesRead);
-        if (result = ScanPatterns((uintptr_t)buffer, bytesRead, (uintptr_t)mbi.BaseAddress)) {
+        ReadProcessMemory(chaos->handles->emulator, mbi.BaseAddress, buffer, mbi.RegionSize, &bytesRead);
+        if (result = ScanPatterns(chaos, (uintptr_t)buffer, bytesRead, (uintptr_t)mbi.BaseAddress)) {
             for (UINT8 i = 0, j = 0, k = 0; i < MAX_FIGHTERS; i++) {
                 if (!chaos->data->addresses[i] && result->addresses[j])
                     chaos->data->addresses[i] = result->addresses[j++];
@@ -393,7 +456,7 @@ VOID SearchAddresses(CHAOS *chaos)
             chaos->data->index = 0;
             for (UINT8 i = 0; i < NB_CHEATS; i++)
                 if (chaos->states->searching[i])
-                    HandleStatus(chaos, "Match not started, click Start when it is", &chaos->states->searching[i], i);
+                    HandleStatus(chaos, "Match not started or wrong SSBU version/emulator", &chaos->states->searching[i], i);
             return;
         }
         for (UINT8 i = 0; i < NB_CHEATS; i++) {
@@ -406,9 +469,9 @@ VOID SearchAddresses(CHAOS *chaos)
         for (UINT8 i = 0; i < MAX_FIGHTERS; i++) {
             if (chaos->data->addresses[i]) {
                 FLOAT value = 0;
-                ReadProcessMemory(chaos->handles->yuzu, (LPCVOID)(chaos->data->addresses[i] + PERCENTS_OFFSET), &value, sizeof(value), 0);
+                ReadProcessMemory(chaos->handles->emulator, (LPCVOID)(chaos->data->addresses[i] + PERCENTS_OFFSET), &value, sizeof(value), 0);
                 chaos->data->previousValues[i] = value;
-                ReadProcessMemory(chaos->handles->yuzu, (LPCVOID)(chaos->data->addresses[MAX_FIGHTERS + i] + SHIELDS_OFFSET), &value, sizeof(value), 0);
+                ReadProcessMemory(chaos->handles->emulator, (LPCVOID)(chaos->data->addresses[MAX_FIGHTERS + i] + SHIELDS_OFFSET), &value, sizeof(value), 0);
                 chaos->data->previousValues[i] = value;
             }
         }
